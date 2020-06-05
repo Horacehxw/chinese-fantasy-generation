@@ -1,5 +1,8 @@
-# IntelliJ, PyCharm files.
+# Editer files.
 .idea/
+.vscode/
+
+# dataset
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
