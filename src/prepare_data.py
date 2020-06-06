@@ -103,6 +103,7 @@ def clean_text(s):
     new_text = re.sub("。。。+|\.\.\.+|…+", "…", new_text)  # 省略号 in HanLP
     new_text = re.sub("-+", "-", new_text)  # 合并-
     new_text = re.sub("—+", "-", new_text)  # 合并———
+    new_text = re.sub("\++", "+", new_text)
     new_text = re.sub("\?+", "?", new_text)
     new_text = re.sub("!+", "!", new_text)
     # new_text = re.sub(r"([^\.])(\.)([^\.])", r"\1\3", new_text) # remove single dots

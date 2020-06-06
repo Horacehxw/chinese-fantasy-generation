@@ -108,17 +108,20 @@ scheduler = torch.optim.lr_scheduler.StepLR(trainer_vae, step_size=3000, gamma=0
 cross_entropy = torch.nn.CrossEntropyLoss()
 
 # KL weight function
+num_iter = sum(1 for _ in train_iter) * opt.epochs
+duration = num_iter // 4 + 1
+
 def kl_weight(step):
     if opt.kl_annealing == "linear":
-        kld_coef = min(1,step/(21000.0))
+        kld_coef = min(1,step/float(duration))
     elif opt.kl_annealing == "cyclic":
-        kld_coef = (step % 21000) / 21000.0
+        kld_coef = (step % duration) / duration
     elif opt.kl_annealing == "none" or opt.kl_annealing == "constant":
         kld_coef = 1
     elif opt.kl_annealing == "tanh":
-        kld_coef = (math.tanh((step - 10500) / 1000) + 1) / 2
+        kld_coef = (math.tanh((step - duration//2) / 1000.0) + 1) / 2
     elif opt.kl_annealing == "cyclic_tanh":
-        kld_coef = (math.tanh(((step%21000) - 10500) / 1000) + 1) / 2
+        kld_coef = (math.tanh(((step%duration) - duration//2) / 1000.0) + 1) / 2
     else:
         raise NotImplementedError("Unkown kl annealing method.")
     return kld_coef
@@ -147,20 +150,17 @@ def train_batch(x, step, teacher_forcing=1):
         logit, _, kld = vae(x, G_inp)
         rec_loss = cross_entropy(logit.view(-1, opt.n_vocab), target.contiguous().view(-1))
     else:
+        # TODO: change to encode, decode functions.
         rec_loss = 0
         n_seq, batch_size = x.size()
-        x = vae.embedding(x)  # Produce embeddings from encoder input
-        E_hidden = vae.encoder(x)  # Get h_T of Encoder (batch, n_hidden_E * 2)
-        mu = vae.hidden_to_mu(E_hidden)  # Get mean of lantent z
-        logvar = vae.hidden_to_logvar(E_hidden)  # Get log variance of latent z
+        mu, logvar = vae.encode(x)
         z = torch.randn([batch_size, vae.n_z], device=device)  # Noise sampled from ε ~ Normal(0,1)
         z = mu + z * torch.exp(0.5 * logvar)
         kld = -0.5 * torch.sum(logvar - mu.pow(2) - logvar.exp() + 1, 1).mean()
         G_inp = G_inp[:1]
         G_hidden = None
         for di in range(target.size(0)):
-            G_inp_embed = vae.embedding(G_inp)
-            logit, G_hidden = vae.generator(G_inp_embed, z, G_hidden)
+            logit, G_hidden = vae.generate(G_inp, z, G_hidden)
             topv, topi = logit.topk(1)
             G_inp = topi.squeeze(2).detach()
             rec_loss += cross_entropy(logit.view(-1, opt.n_vocab), target[di])
@@ -241,7 +241,6 @@ def training():
         tb_writer.add_scalar("Loss/val", valid_kl_loss+valid_rec_loss, epoch)
 
         print("No.", epoch, "T_ppl:", '%.2f'%np.exp(train_rec_loss), "T_kld:", '%.2f'%train_kl_loss, "V_ppl:", '%.2f'%np.exp(valid_rec_loss), "V_kld:", '%.2f'%valid_kl_loss)
-        best_loss = valid_kl_loss + valid_rec_loss
         model_path = osp.join(model_dir, "state_dict_{}.tar".format(epoch))
         torch.save(vae.state_dict(), model_path)
         if valid_kl_loss + valid_rec_loss < best_loss:
@@ -250,14 +249,14 @@ def training():
             model_path = osp.join(model_dir, "state_dict_best.tar")
             torch.save(vae.state_dict(), model_path)
 
-def generate_paragraph(generator, z, decode="greedy"):
+def generate_paragraph(z, decode="greedy"):
+    vae.eval()
     G_inp = fields["text"].numericalize([[fields["text"].init_token]], device=device)
-    str = fields["text"].init_token
+    output_str = fields["text"].init_token
     G_hidden = None  # init with no hidden state
-    with torch.autograd.no_grad():
+    with torch.no_grad():
         while G_inp[0][0].item() != vocab.stoi[fields["text"].eos_token]:
-            G_inp = vae.embedding(G_inp)
-            logit, G_hidden = generator(G_inp, z, G_hidden)
+            logit, G_hidden = vae.generate(G_inp, z, G_hidden)
             if decode == "greedy":
                 topv, topi = logit.topk(1)
                 G_inp = topi[0].detach()
@@ -268,19 +267,21 @@ def generate_paragraph(generator, z, decode="greedy"):
                 raise NotImplementedError("Havn't Implement beam search decoding method.")
             else:
                 raise AttributeError("Invalid decoding method")
-            str += (vocab.itos[G_inp[0][0].item()])
-    return str
+            output_str += (vocab.itos[G_inp[0][0].item()])
+            # FIXME: sometimes the model failed to generate [EOS] token.
+            if len(output_str) > 999:
+                output_str = "[ERR]" + output_str
+                break
+    return output_str
 
 def generate_paragraphs(vae, n_sample=50, decode="greedy"):
     vae.to(device)
     vae.eval()
-    generator = vae.generator
     for i in range(n_sample):
         z = torch.randn([1, opt.n_z], device=device)
-        str = generate_paragraph(generator, z, decode)
-        # str = str.encode('utf-8')
-        tb_writer.add_text("Generate Paragraph", str, i)
-        print(str)
+        output_str = generate_paragraph(z, decode)
+        tb_writer.add_text("Generate Paragraph", output_str, i)
+        print(output_str)
 
 def visualize_graph():
     vae.to(device)
@@ -292,9 +293,10 @@ def visualize_graph():
 
 
 if __name__ == '__main__':
-    if not opt.generate_only:
-        visualize_graph()
-        training()
-    model_path = osp.join(model_dir, "state_dict.tar")
-    vae.load_state_dict(torch.load(model_path))
+    # if not opt.generate_only:
+    #     visualize_graph()
+    #     training()
+    # # TODO: test load state with new encode, generate functions.
+    # model_path = osp.join(model_dir, "state_dict.tar")
+    # vae.load_state_dict(torch.load(model_path))
     generate_paragraphs(vae, decode=opt.generation_decoder)

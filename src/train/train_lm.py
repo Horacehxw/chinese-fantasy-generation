@@ -23,7 +23,7 @@ parser.add_argument('--n_hidden', type=int, default=512)
 parser.add_argument('--n_layers', type=int, default=2)
 parser.add_argument('--word_dropout', type=float, default=0.5)
 parser.add_argument('--lr', type=float, default=0.0003)
-parser.add_argument('--gpu_device', type=int, default=1)
+parser.add_argument('--gpu_device', type=int, default=0)
 parser.add_argument('--n_embed', type=int, default=300)
 parser.add_argument('--clip', type=float, default=0.25,
                     help='gradient clipping')
@@ -178,33 +178,6 @@ def training():
             torch.save(best_model, osp.join(model_dir, "best_model.pt"))
             print("best_model !!!")
 
-# def generate_paragraphs(vae, n_sample=50, decode="greedy"):
-#     vae.to(device)
-#     vae.eval()
-#     generator = vae.generator
-#     for i in range(n_sample):
-#         z = torch.randn([1, opt.n_z], device=device)
-#         G_inp = fields["text"].numericalize([[fields["text"].init_token]], device=device)
-#         str = fields["text"].init_token
-#         G_hidden = None # init with no hidden state
-#         with torch.autograd.no_grad():
-#             while G_inp[0][0].item() != vocab.stoi[fields["text"].eos_token]:
-#                 G_inp = vae.embedding(G_inp)
-#                 logit, G_hidden = generator(G_inp, z, G_hidden)
-#                 probs = F.softmax(logit[0], dim=1)
-#                 if decode == "greedy":
-#                     topv, topi = logit.topk(1)
-#                     G_inp = topi.squeeze().detach()
-#                 elif decode == "sample":
-#                     G_inp = torch.multinomial(probs, 1)
-#                 elif decode == "beam search":
-#                     raise NotImplementedError("Havn't Implement beam search decoding method.")
-#                 else:
-#                     raise AttributeError("Invalid decoding method")
-#                 str += (vocab.itos[G_inp[0][0].item()])
-#         str = str.encode('utf-8')
-#         tb_writer.add_text("Generate Paragraph", str, i)
-
 def generate_paragraph(lm_model, hidden, decode="greedy"):
     input_vector = fields["text"].numericalize([[fields["text"].init_token]], device=device)
     output_str = fields["text"].init_token
@@ -222,6 +195,10 @@ def generate_paragraph(lm_model, hidden, decode="greedy"):
             else:
                 raise AttributeError("Invalid decoding method")
             output_str += (vocab.itos[input_vector[0][0].item()])
+            # FIXME: sometimes the model failed to generate [EOS] token.
+            if len(output_str) > 999:
+                output_str = "[ERR]" + output_str
+                break
     return output_str
 
 def generate_paragraphs(lm_model, n_sampe=50, decode="greedy"):
@@ -236,8 +213,8 @@ def generate_paragraphs(lm_model, n_sampe=50, decode="greedy"):
 
 
 if __name__ == '__main__':
-    if not opt.generate_only:
-        training()
+    # if not opt.generate_only:
+    #     training()
     model_path = osp.join(model_dir, "best_model.pt")
     lm_model = torch.load(model_path)
     generate_paragraphs(lm_model, decode=opt.generation_decoder)

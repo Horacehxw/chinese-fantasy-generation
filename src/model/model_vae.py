@@ -95,17 +95,47 @@ class VAE(nn.Module):
         self.n_z = opt.n_z
 
     def forward(self, x, G_inp, G_hidden = None):
+        """
+        Forward propagation in trianing stage
+        :param x: input sentence to encode. (seq_len, batch_size)
+        :param G_inp: input sentence for teacher forcing training (x[:-1]). (seq_len-1, batch_size)
+        :param G_hidden: hidden state for generator, default=None.
+        :return:
+            logit: output of generator LSTM at each time stamp.
+            G_hidden: h_t & c_t hidden state of generator LSTM.
+            kld: KL divergence between N(mu, exp(logvar)) and N(0,1).
+        """
         n_seq, batch_size = x.size()
-        x = self.embedding(x)	                                    #Produce embeddings from encoder input
-        E_hidden = self.encoder(x)	                                #Get h_T of Encoder (batch, n_hidden_E * 2)
-        mu = self.hidden_to_mu(E_hidden)	                        #Get mean of lantent z
-        logvar = self.hidden_to_logvar(E_hidden)	                #Get log variance of latent z
+        mu, logvar = self.encode(x)
         device = (next(self.parameters())).device
         z = torch.randn([batch_size, self.n_z], device=device)	            #Noise sampled from ε ~ Normal(0,1)
         z = mu + z * torch.exp(0.5 * logvar)	                            #Reparameterization trick: Sample z = μ + ε*σ for backpropogation
         kld = -0.5 * torch.sum(logvar - mu.pow(2) - logvar.exp() + 1, 1).mean()	#Compute KL divergence loss
-
-        G_inp = self.embedding(G_inp)	                                #Produce embeddings for generator input
-
-        logit, G_hidden = self.generator(G_inp, z, G_hidden)
+        logit, G_hidden = self.generate(G_inp, z, G_hidden)
         return logit, G_hidden, kld
+
+    def encode(self, x):
+        """
+        Given input sentence x, provide the latent variable's mu & log variance
+        :param x: input sequence. (seq_len, batch_size)
+        :return: mu, logvar
+        """
+        x = self.embedding(x)  # Produce embeddings from encoder input
+        E_hidden = self.encoder(x)  # Get h_T of Encoder (batch, n_hidden_E * 2)
+        mu = self.hidden_to_mu(E_hidden)  # Get mean of lantent z
+        logvar = self.hidden_to_logvar(E_hidden)  # Get log variance of latent z
+        return mu, logvar
+
+    def generate(self, G_inp, z, G_hidden):
+        """
+        Given input sequence G_inp, latent vaiable z, perform VAE generator function
+        :param G_inp: input sentence G_inp (should be x[:-1] in teacher forcing inference)
+        :param z: latent variable sampled from encode latent space
+        :param G_hidden:
+        :return:
+            logit: output of generator LSTM at each time stamp.
+            G_hidden: h_t & c_t hidden state of generator LSTM.
+        """
+        G_inp = self.embedding(G_inp)  # Produce embeddings for generator input
+        logit, G_hidden = self.generator(G_inp, z, G_hidden)
+        return logit, G_hidden
