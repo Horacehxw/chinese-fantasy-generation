@@ -109,7 +109,7 @@ cross_entropy = torch.nn.CrossEntropyLoss()
 
 # KL weight function
 num_iter = sum(1 for _ in train_iter) * opt.epochs
-duration = num_iter // 4 + 1
+duration = (num_iter // 4) + 1
 
 def kl_weight(step):
     if opt.kl_annealing == "linear":
@@ -142,6 +142,7 @@ def word_dropout(G_inp, drop=0.5):
     return G_inp
 
 def train_batch(x, step, teacher_forcing=1):
+    # TODO: add lagging inference training method here
     # This is just like a latent variable + Language Model.
     target = x[1:]  # target for generator should exclude first word of sequence
     G_inp = x[:-1].clone()
@@ -150,7 +151,6 @@ def train_batch(x, step, teacher_forcing=1):
         logit, _, kld = vae(x, G_inp)
         rec_loss = cross_entropy(logit.view(-1, opt.n_vocab), target.contiguous().view(-1))
     else:
-        # TODO: change to encode, decode functions.
         rec_loss = 0
         n_seq, batch_size = x.size()
         mu, logvar = vae.encode(x)
@@ -293,10 +293,9 @@ def visualize_graph():
 
 
 if __name__ == '__main__':
-    # if not opt.generate_only:
-    #     visualize_graph()
-    #     training()
-    # # TODO: test load state with new encode, generate functions.
-    # model_path = osp.join(model_dir, "state_dict.tar")
-    # vae.load_state_dict(torch.load(model_path))
+    if not opt.generate_only:
+        visualize_graph()
+        training()
+    model_path = osp.join(model_dir, "state_dict_best.tar")
+    vae.load_state_dict(torch.load(model_path))
     generate_paragraphs(vae, decode=opt.generation_decoder)

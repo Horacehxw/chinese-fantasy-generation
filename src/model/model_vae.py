@@ -7,6 +7,7 @@ https://github.com/rohithreddy024/VAE-Text-Generation
 import torch as torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 class Highway(nn.Module):
     def __init__(self, opt):

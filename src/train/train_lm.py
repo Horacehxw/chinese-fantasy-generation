@@ -55,7 +55,7 @@ else:
 experiment_list = ["{}:{}".format(k,v) for k,v in vars(opt).items() if k not in ["gpu_device", "generation_decoder", "generate_only"]]
 experiment_path = osp.join(*experiment_list)
 
-result_path = (Path(__file__)/"../../../results/lm_model").resolve()
+result_path = (Path(__file__)/"../../../results/lm-LSTM").resolve()
 print("result path = {}".format(result_path))
 
 log_dir = osp.join(result_path/"logs", experiment_path) # path to store tensorboard logging data for each experiment
@@ -100,12 +100,11 @@ def evaluate():
     with torch.no_grad():
         for batch in test_iter:
             x = batch.text
-            hidden = lm_model.init_hidden(x.size()[1])
             data = x[:-1].clone()
             target = x[1:].clone()
             data = data.to(device)
             target = target.to(device)
-            output, hidden = lm_model(data, hidden)
+            output, hidden = lm_model(data, None)
             loss = criterion(output.view(-1, opt.n_vocab), target.view(-1)) # loss for (seq_len*batch_size) outputs
             total_loss += loss.item() * len(data)
             num_items += len(data)
@@ -124,14 +123,12 @@ def train():
 
     for batch in train_iter:
         x = batch.text
-        hidden = lm_model.init_hidden(x.size()[1])
         data = x[:-1].clone()
         target = x[1:].clone()
         data = data.to(device)
         target = target.to(device)
-        hidden = hidden.detach() # avoid long gradient history tracking.
         optimizer.zero_grad()
-
+        hidden = None
         if random.random() < opt.teacher_forcing:
             output, hidden = lm_model(data, hidden)
             loss = criterion(output.view(-1, opt.n_vocab), target.view(-1))
@@ -172,11 +169,14 @@ def training():
         tb_writer.add_scalar("Loss/val", val_loss, epoch)
         tb_writer.add_scalar("Perplexity/val", math.exp(val_loss), epoch)
 
+        model_path = osp.join(model_dir, "state_dict_{}.tar".format(epoch))
+        torch.save(lm_model.state_dict(), model_path)
         if val_loss < best_loss:
-            best_loss = val_loss
-            best_model = lm_model
-            torch.save(best_model, osp.join(model_dir, "best_model.pt"))
             print("best_model !!!")
+            best_loss = val_loss
+            model_path = osp.join(model_dir, "state_dict_best.tar")
+            torch.save(lm_model.state_dict(), model_path)
+
 
 def generate_paragraph(lm_model, hidden, decode="greedy"):
     input_vector = fields["text"].numericalize([[fields["text"].init_token]], device=device)
@@ -205,16 +205,16 @@ def generate_paragraphs(lm_model, n_sampe=50, decode="greedy"):
     lm_model.to(device)
     lm_model.eval()
     for i in range(n_sampe):
-        hidden = torch.randn(lm_model.init_hidden(1).size(), device=device)
-        output_str = generate_paragraph(lm_model, hidden, decode)
-        # output_str = output_str.encode('utf-8')
+        h_0 = torch.randn((lm_model.nlayers, 1, lm_model.nhid), device=device)
+        c_0 = torch.randn((lm_model.nlayers, 1, lm_model.nhid), device=device)
+        output_str = generate_paragraph(lm_model, (h_0, c_0), decode)
         tb_writer.add_text("Generate Paragraph", output_str, i)
         print(output_str)
 
 
 if __name__ == '__main__':
-    # if not opt.generate_only:
-    #     training()
-    model_path = osp.join(model_dir, "best_model.pt")
-    lm_model = torch.load(model_path)
+    if not opt.generate_only:
+        training()
+    model_path = osp.join(model_dir, "state_dict_best.tar")
+    lm_model.load_state_dict(torch.load(model_path))
     generate_paragraphs(lm_model, decode=opt.generation_decoder)

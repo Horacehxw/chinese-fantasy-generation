@@ -26,38 +26,31 @@ class LMModel(nn.Module):
         # Add positional encoding
         ########################################
         # Construct you RNN lm_model here. You can add additional parameters to the function.
-        self.rnn = nn.GRU(ninput, nhid, nlayers, dropout=drop_rate)
+        # self.rnn = nn.GRU(ninput, nhid, nlayers, dropout=drop_rate)
+        # TODO: change from GRU to LSTM, solve hidden state issues.
+        self.rnn = nn.LSTM(ninput, nhid, nlayers, dropout=drop_rate)
         ########################################
         self.decoder = nn.Linear(nhid, nvoc)
         self.nhid = nhid
         self.nlayers = nlayers
-        self.init_weights()
+        self.hidden = None
 
-    def init_weights(self):
-        init_uniform = 1.0 / math.sqrt(self.nhid)
-        self.encoder.weight.data.uniform_(-init_uniform, init_uniform)
-        self.decoder.bias.data.zero_()
-        self.decoder.weight.data.uniform_(-init_uniform, init_uniform)
-
-    def forward(self, input, hidden):
+    def forward(self, input, hidden=None):
         """
         :param input: (Sequence, Batch size, Input dimension)
         :return: output, hidden.
         """
-        embeddings = self.drop(self.encoder(input)) # embedding = (seq_len, batch_size, ninput)
+        seq_len, batch_size = input.size()
+        embeddings = self.drop(self.encoder(input)) # embedding = (seq_len, batch_size, nembed)
 
-        # WRITE CODE HERE within two '#' bar
-        ########################################
-        # With embeddings, you can get your output here.
-        # The ouput contains hidden state h_t from the last layer of the GRU, for each t.
-        # Output = (seq_len, batch_size, nhid)
-        # The hidden contains hidden state for t = seq_len, for each layer.
-        # Hidden = (nlyaers, batch_size, nhid)
-        output, hidden = self.rnn(embeddings, hidden)
+        if hidden is None:
+            self.init_hidden(batch_size)
+        else:
+            self.hidden = hidden
+        output, self.hidden = self.rnn(embeddings, self.hidden)
         output = self.drop(output)  # output = (seq_len, batch_size, nhid)
-        ########################################
         decoded = self.decoder(output) # decoded = (seq_len * batch_size, n_hidden)
-        return decoded, hidden
+        return decoded, self.hidden
 
     def init_hidden(self, batch_size):
         """
@@ -65,5 +58,7 @@ class LMModel(nn.Module):
         :return: Tensor w/ value 0, size (nlayers * batch_size * nhid)
         """
         tensor = next(self.parameters())
-        return tensor.new_zeros(size=(self.nlayers, batch_size, self.nhid))
+        h_0 = tensor.new_zeros(self.nlayers, batch_size, self.nhid)
+        c_0 = tensor.new_zeros(self.nlayers, batch_size, self.nhid)
+        self.hidden = h_0, c_0
 
