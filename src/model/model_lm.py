@@ -27,7 +27,7 @@ class LMModel(nn.Module):
         ########################################
         # Construct you RNN lm_model here. You can add additional parameters to the function.
         # self.rnn = nn.GRU(ninput, nhid, nlayers, dropout=drop_rate)
-        # TODO: change from GRU to LSTM, solve hidden state issues.
+        # FIXME: pack padded sequence to make sure no padding is used.
         self.rnn = nn.LSTM(ninput, nhid, nlayers, dropout=drop_rate)
         ########################################
         self.decoder = nn.Linear(nhid, nvoc)

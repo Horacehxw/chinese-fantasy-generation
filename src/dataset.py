@@ -25,6 +25,7 @@ AUTHOR = Field(sequential=False)
 fast_tokenizer = BertTokenizerFast.from_pretrained("bert-base-chinese")
 fast_tokenizer.add_tokens(["…", "[EOS]", "[SOS]"])
 # set [SEP] to stop words if neccessary
+# FIXME: return sequence length before padding.
 TEXT = Field(init_token="[SOS]",
             eos_token="[EOS]",
             pad_token="[PAD]",

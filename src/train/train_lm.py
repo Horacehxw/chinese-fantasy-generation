@@ -85,6 +85,7 @@ lm_model = lm_model.to(device)
 optimizer = torch.optim.Adam(lm_model.parameters(), lr=opt.lr)
 
 # loss
+# FIXME: ignore the padded index here!
 criterion = torch.nn.CrossEntropyLoss()
 
 #################################################
