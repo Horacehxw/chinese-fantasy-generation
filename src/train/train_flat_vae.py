@@ -105,7 +105,7 @@ vae = vae.to(device)
 # TODO: learn internal algorithm of adam.
 assert len(list(vae.encoder.parameters())) + len(list(vae.generator.parameters())) == \
        len(list(vae.parameters())), "The vae contains parameters not in encoder nor generator."
-aggressive_flag = True #opt.aggressive
+aggressive_flag = opt.aggressive
 if aggressive_flag:
     enc_opt = torch.optim.Adam(vae.encoder.parameters(), lr=opt.lr)
     dec_opt = torch.optim.Adam(vae.generator.parameters(), lr=opt.lr)
