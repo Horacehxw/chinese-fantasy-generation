@@ -5,6 +5,7 @@ Borrow from homework3.
 import torch
 import torch.nn as nn
 import math
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 class LMModel(nn.Module):
     # Language lm_model is composed of three parts: a word embedding layer, a rnn network and a output layer.
@@ -35,21 +36,32 @@ class LMModel(nn.Module):
         self.nlayers = nlayers
         self.hidden = None
 
-    def forward(self, input, hidden=None):
+    def forward(self, input, lengths, hidden=None):
         """
         :param input: (Sequence, Batch size, Input dimension)
-        :return: output, hidden.
+        :param lengths: (list[int], length=batch_size), length of each sequence in minibatch
+        :param hidden: hidden state of rnn module
+        :return:
+            output: (seq_len, batch_size, n_voc) logit of predicted next token
+            hidden: hidden state of rnn
         """
         seq_len, batch_size = input.size()
+
         embeddings = self.drop(self.encoder(input)) # embedding = (seq_len, batch_size, nembed)
 
         if hidden is None:
             self.init_hidden(batch_size)
         else:
             self.hidden = hidden
+
+        # pack --> rnn --> pad.
+        # FIXME. test directly pack & pad for embeddings.
+        embeddings = pack_padded_sequence(embeddings, lengths)
         output, self.hidden = self.rnn(embeddings, self.hidden)
+        output, _ = pad_packed_sequence(output)
+
         output = self.drop(output)  # output = (seq_len, batch_size, nhid)
-        decoded = self.decoder(output) # decoded = (seq_len * batch_size, n_hidden)
+        decoded = self.decoder(output) # decoded = (seq_len, batch_size, n_hidden)
         return decoded, self.hidden
 
     def init_hidden(self, batch_size):

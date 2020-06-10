@@ -27,12 +27,13 @@ fast_tokenizer.add_tokens(["…", "[EOS]", "[SOS]"])
 # set [SEP] to stop words if neccessary
 # FIXME: return sequence length before padding.
 TEXT = Field(init_token="[SOS]",
-            eos_token="[EOS]",
-            pad_token="[PAD]",
-            unk_token="[UNK]",
-            stop_words=["[SEP]"],
-            tokenize=fast_tokenizer.tokenize
-           )
+             eos_token="[EOS]",
+             pad_token="[PAD]",
+             unk_token="[UNK]",
+             stop_words=["[SEP]"],
+             tokenize=fast_tokenizer.tokenize,
+             include_lengths=True
+            )
 
 tokenizer = hanlp.load("PKU_NAME_MERGED_SIX_MONTHS_CONVSEG")
 TEXT_cws = Field(init_token="[SOS]",
@@ -152,11 +153,12 @@ def datapoint2example(datapoint, cws=False):
                                    }
                            )
 
-def get_itrerators(opt):
+def get_iterators(opt, device=None):
     """
     Get dataset iterator and necessary fields information
-    :param opt: opt from argparser
-    :return:
+    :param opt: opt from argparser.
+    :param device: device to create the data.
+    :return: train_iter, test_iter, dataset.fields
     """
     import random
     random.seed(42)
@@ -165,8 +167,12 @@ def get_itrerators(opt):
     dataset.fields["author"].build_vocab(dataset)
     dataset.fields["book"].build_vocab(dataset)
     train, test = dataset.split(split_ratio=0.7)
-    train_iter = BucketIterator(train, batch_size=opt.train_batch_size, shuffle=True)
-    test_iter = BucketIterator(test, batch_size=opt.eval_batch_size, shuffle=False)
+    train_iter, test_iter = BucketIterator.splits((train, test), # first one is default to train (shuffle each epoch)
+                                                  batch_sizes=(opt.train_batch_size, opt.eval_batch_size),
+                                                  device=device,
+                                                  sort_key=lambda x: len(x.text),
+                                                  sort_within_batch=True
+                                                  )
     return train_iter, test_iter, dataset.fields
 
 

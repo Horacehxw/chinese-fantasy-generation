@@ -39,7 +39,7 @@ parser.add_argument("--generation_decoder", default="greedy",
 opt = parser.parse_args()
 print(opt)
 
-from src.dataset import get_itrerators
+from src.dataset import get_iterators
 # Set the random seed manually for reproducibility.
 torch.manual_seed(opt.seed)
 
@@ -73,10 +73,11 @@ if not osp.exists(txt_dir):
 ##################################################
 
 # Load dataset
-train_iter, test_iter, fields = get_itrerators(opt)
+train_iter, test_iter, fields = get_iterators(opt, device)
 vocab = fields["text"].vocab
 opt.n_vocab = len(vocab)
 opt.fields = fields
+# train_batch_list = list(train_iter) # prepare for random data batch in aggressive training.
 
 # load lm_model
 lm_model = LMModel(opt.n_vocab, opt.n_embed, opt.n_hidden, opt.n_layers)
@@ -85,72 +86,65 @@ lm_model = lm_model.to(device)
 optimizer = torch.optim.Adam(lm_model.parameters(), lr=opt.lr)
 
 # loss
-# FIXME: ignore the padded index here!
-criterion = torch.nn.CrossEntropyLoss()
+# sum up the loss for every entry, then divide it by number of non-padding elements.
+padding_id = vocab.stoi[fields["text"].pad_token]
+criterion = torch.nn.CrossEntropyLoss(reduction="sum",ignore_index=padding_id) # pad token will contribute 0 to loss
 
 #################################################
 
+def calc_batch_loss(batch, teacher_forcing=1):
+    """
+    Calculate the loss for given batch of data
+    :param batch: batch of data.
+    :param teacher_forcing: (float, default=1) rate of teacher forcing
+    :return: loss tensor
+    """
+    x, x_len = batch.text
+    data = x[:-1].clone()
+    target = x[1:].clone()
+    x_len -= 1 # ignore the "[EOS]" token
+    hidden = None
+    if random.random() < teacher_forcing:
+        output, hidden = lm_model(data, x_len, hidden)
+        loss = criterion(output.view(-1, opt.n_vocab), target.view(-1))
+    else:
+        loss = 0
+        input_vector = data[:1] # "[SOS]" for each element
+        for idx in range(target.size(0)):
+            # the length here will not influence hidden state of rnn.
+            logit, hidden = lm_model(input_vector, [1]*input_vector.size(1), hidden)
+            topv, topi = logit.topk(1)
+            input_vector = topi.squeeze(2).detach()
+            loss += criterion(logit.view(-1, opt.n_vocab), target[idx])
+    loss /= (target != padding_id).int().sum()
+    return loss
+
+# Evalutate Function
 def evaluate():
     """
     Evaluate the current lm_model on validation set
     :return: Perplexity = exp(average cross-entropy loss)
     """
     lm_model.eval() # turn on evaluation mode
-    total_loss = 0
-    num_items = 0
+    valid_loss = []
     with torch.no_grad():
         for batch in test_iter:
-            x = batch.text
-            data = x[:-1].clone()
-            target = x[1:].clone()
-            data = data.to(device)
-            target = target.to(device)
-            output, hidden = lm_model(data, None)
-            loss = criterion(output.view(-1, opt.n_vocab), target.view(-1)) # loss for (seq_len*batch_size) outputs
-            total_loss += loss.item() * len(data)
-            num_items += len(data)
-    avg_loss = total_loss / num_items
-    return avg_loss
+            loss = calc_batch_loss(batch) # teacher forcing default to 1
+            valid_loss.append(loss.item())
+    return np.mean(valid_loss)
 
-########################################
-# WRITE CODE HERE within two '#' bar
-########################################
 # Train Function
 def train():
     lm_model.train() # turn on training mode
-    total_loss = 0
-    num_items = 0
-
-
+    train_loss = []
     for batch in train_iter:
-        x = batch.text
-        data = x[:-1].clone()
-        target = x[1:].clone()
-        data = data.to(device)
-        target = target.to(device)
+        loss = calc_batch_loss(batch, opt.teacher_forcing)
         optimizer.zero_grad()
-        hidden = None
-        if random.random() < opt.teacher_forcing:
-            output, hidden = lm_model(data, hidden)
-            loss = criterion(output.view(-1, opt.n_vocab), target.view(-1))
-        else:
-            loss = 0
-            input_vector = data[:1]
-            for idx in range(target.size(0)):
-                logit, hidden = lm_model(input_vector, hidden)
-                topv, topi = logit.topk(1)
-                input_vector = topi.squeeze(2).detach()
-                loss += criterion(logit.view(-1, opt.n_vocab), target[idx])
-            loss /= float(target.size(0))
-
         loss.backward()
         clip_grad_norm_(lm_model.parameters(), opt.clip)
         optimizer.step()
-
-        total_loss += loss.item() * len(data)
-        num_items += len(data)
-    avg_loss = total_loss / num_items
-    return avg_loss
+        train_loss.append(loss.item())
+    return np.mean(train_loss)
 
 def training():
     print("start training")
@@ -178,13 +172,12 @@ def training():
             model_path = osp.join(model_dir, "state_dict_best.tar")
             torch.save(lm_model.state_dict(), model_path)
 
-
 def generate_paragraph(lm_model, hidden, decode="greedy"):
     input_vector = fields["text"].numericalize([[fields["text"].init_token]], device=device)
     output_str = fields["text"].init_token
     with torch.no_grad():
         while input_vector.item() != vocab.stoi[fields["text"].eos_token]:
-            logit, hidden = lm_model(input_vector, hidden)
+            logit, hidden = lm_model(input_vector, [1], hidden)
             if decode == "greedy":
                 topv, topi = logit.topk(1)
                 input_vector = topi[0].detach()
