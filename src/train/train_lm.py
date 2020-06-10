@@ -21,7 +21,7 @@ parser.add_argument('--eval_batch_size', type=int, default=64, metavar='N',
 parser.add_argument('--epochs', type=int, default=20)
 parser.add_argument('--n_hidden', type=int, default=512)
 parser.add_argument('--n_layers', type=int, default=2)
-parser.add_argument('--word_dropout', type=float, default=0.5)
+parser.add_argument('--word_dropout', type=float, default=1)
 parser.add_argument('--lr', type=float, default=0.0003)
 parser.add_argument('--gpu_device', type=int, default=0)
 parser.add_argument('--n_embed', type=int, default=300)
@@ -87,8 +87,8 @@ optimizer = torch.optim.Adam(lm_model.parameters(), lr=opt.lr)
 
 # loss
 # sum up the loss for every entry, then divide it by number of non-padding elements.
-padding_id = vocab.stoi[fields["text"].pad_token]
-criterion = torch.nn.CrossEntropyLoss(reduction="sum",ignore_index=padding_id) # pad token will contribute 0 to loss
+pad_id = vocab.stoi[fields["text"].pad_token]
+criterion = torch.nn.CrossEntropyLoss(reduction="sum",ignore_index=pad_id) # pad token will contribute 0 to loss
 
 #################################################
 
@@ -116,7 +116,7 @@ def calc_batch_loss(batch, teacher_forcing=1):
             topv, topi = logit.topk(1)
             input_vector = topi.squeeze(2).detach()
             loss += criterion(logit.view(-1, opt.n_vocab), target[idx])
-    loss /= (target != padding_id).int().sum()
+    loss /= (target != pad_id).int().sum()
     return loss
 
 # Evalutate Function
@@ -173,7 +173,8 @@ def training():
             torch.save(lm_model.state_dict(), model_path)
 
 def generate_paragraph(lm_model, hidden, decode="greedy"):
-    input_vector = fields["text"].numericalize([[fields["text"].init_token]], device=device)
+    input_vector = torch.tensor([[vocab.stoi[fields["text"].init_token]]], device=device)
+    # input_vector = fields["text"].numericalize([[fields["text"].init_token]], device=device)
     output_str = fields["text"].init_token
     with torch.no_grad():
         while input_vector.item() != vocab.stoi[fields["text"].eos_token]:

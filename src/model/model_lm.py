@@ -28,7 +28,6 @@ class LMModel(nn.Module):
         ########################################
         # Construct you RNN lm_model here. You can add additional parameters to the function.
         # self.rnn = nn.GRU(ninput, nhid, nlayers, dropout=drop_rate)
-        # FIXME: pack padded sequence to make sure no padding is used.
         self.rnn = nn.LSTM(ninput, nhid, nlayers, dropout=drop_rate)
         ########################################
         self.decoder = nn.Linear(nhid, nvoc)
@@ -55,7 +54,8 @@ class LMModel(nn.Module):
             self.hidden = hidden
 
         # pack --> rnn --> pad.
-        # FIXME. test directly pack & pad for embeddings.
+        # Although not necessary, pack & padding can save memory and accelerate inference speed.
+        # The model can skip processing the pad tokens.
         embeddings = pack_padded_sequence(embeddings, lengths)
         output, self.hidden = self.rnn(embeddings, self.hidden)
         output, _ = pad_packed_sequence(output)
