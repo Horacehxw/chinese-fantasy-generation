@@ -106,7 +106,7 @@ def calc_batch_loss(batch, teacher_forcing=1):
     hidden = None
     if random.random() < teacher_forcing:
         output, hidden = lm_model(data, x_len, hidden)
-        loss = criterion(output.view(-1, opt.n_vocab), target.view(-1))
+        loss = criterion(output.view(-1, opt.n_vocab), target.contiguous().view(-1))
     else:
         loss = 0
         input_vector = data[:1] # "[SOS]" for each element
@@ -172,7 +172,8 @@ def training():
             model_path = osp.join(model_dir, "state_dict_best.tar")
             torch.save(lm_model.state_dict(), model_path)
 
-def generate_paragraph(lm_model, hidden, decode="greedy"):
+def generate_paragraph(hidden, decode="greedy"):
+    lm_model.eval()
     input_vector = torch.tensor([[vocab.stoi[fields["text"].init_token]]], device=device)
     # input_vector = fields["text"].numericalize([[fields["text"].init_token]], device=device)
     output_str = fields["text"].init_token
@@ -196,13 +197,13 @@ def generate_paragraph(lm_model, hidden, decode="greedy"):
                 break
     return output_str
 
-def generate_paragraphs(lm_model, n_sampe=50, decode="greedy"):
+def generate_paragraphs(n_sampe=50, decode="greedy"):
     lm_model.to(device)
-    lm_model.eval()
+
     for i in range(n_sampe):
         h_0 = torch.randn((lm_model.nlayers, 1, lm_model.nhid), device=device)
         c_0 = torch.randn((lm_model.nlayers, 1, lm_model.nhid), device=device)
-        output_str = generate_paragraph(lm_model, (h_0, c_0), decode)
+        output_str = generate_paragraph((h_0, c_0), decode)
         tb_writer.add_text("Generate Paragraph", output_str, i)
         print(output_str)
 
@@ -212,4 +213,4 @@ if __name__ == '__main__':
         training()
     model_path = osp.join(model_dir, "state_dict_best.tar")
     lm_model.load_state_dict(torch.load(model_path))
-    generate_paragraphs(lm_model, decode=opt.generation_decoder)
+    generate_paragraphs(decode=opt.generation_decoder)

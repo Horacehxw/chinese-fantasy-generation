@@ -17,6 +17,7 @@ from torch.nn.utils import clip_grad_norm_
 import os.path as osp
 import math
 import random
+from src.utils import word_dropout
 
 parser = argparse.ArgumentParser(description="Pytorch flat lstm VAE lm_model for unsuperviced text generation")
 parser.add_argument("--teacher_forcing", type=float, default=1) # probability to do teacher forcing (default to every iter)
@@ -55,7 +56,7 @@ parser.add_argument("--generation_decoder", default="greedy",
 opt = parser.parse_args()
 print(opt)
 
-from src.dataset import get_itrerators
+from src.dataset import get_iterators
 # Set the random seed manually for reproducibility.
 torch.manual_seed(opt.seed)
 
@@ -91,14 +92,19 @@ if not osp.exists(txt_dir):
 ##################################################
 
 # Load dataset
-train_iter, test_iter, fields = get_itrerators(opt)
+train_iter, test_iter, fields = get_iterators(opt, device)
 vocab = fields["text"].vocab
 opt.n_vocab = len(vocab)
 opt.fields = fields
 train_batch_list = list(train_iter) # prepare for random data batch in aggressive training.
+pad_id = vocab.stoi[fields["text"].pad_token]
+unk_id = vocab.stoi[fields["text"].unk_token]
+init_id = vocab.stoi[fields["text"].init_token]
+eos_id = vocab.stoi[fields["text"].eos_token]
+special_tokens = [pad_id, init_id, eos_id]
 
 # load lm_model
-vae = VAE(opt)
+vae = VAE(opt, unk_id, special_tokens)
 vae = vae.to(device)
 
 # load optimizer
@@ -113,8 +119,8 @@ else:
     vae_opt = torch.optim.Adam(vae.parameters(), lr=opt.lr)
 
 # loss
-# FIXME: ignore the padded index here!
-cross_entropy = torch.nn.CrossEntropyLoss()
+# sum up the loss for every entry, then divide it by number of non-padding elements.
+cross_entropy = torch.nn.CrossEntropyLoss(reduction="sum", ignore_index=pad_id) # pad tokens contribute 0 to loss
 
 # KL weight function
 num_iter = len(train_batch_list) * opt.epochs
@@ -137,53 +143,10 @@ def kl_weight(step):
 
 #################################################
 
-# TODO: do we need to deal with [PAD] here?
-def word_dropout(G_inp, drop=0.5):
-    r = np.random.rand(G_inp.size(0), G_inp.size(1))
-    # Perform word_dropout according to random values (r) generated for each word
-    for i in range(len(G_inp)):
-        for j in range(1, G_inp.size(1)):
-            if r[i, j] < opt.word_dropout and G_inp[i, j] not in [vocab.stoi[fields["text"].eos_token],
-                                                                  vocab.stoi[fields["text"].pad_token],
-                                                                  vocab.stoi[fields["text"].init_token]
-                                                                  ]:
-                G_inp[i, j] = vocab.stoi[fields["text"].unk_token]
-    return G_inp
-
-# def train_batch_old(x, step, teacher_forcing=1):
-#     # This is just like a latent variable + Language Model.
-#     target = x[1:]  # target for generator should exclude first word of sequence
-#     G_inp = x[:-1].clone()
-#     G_inp = word_dropout(G_inp, opt.word_dropout)
-#     if random.random() < teacher_forcing:
-#         logit, _, kld = vae(x, G_inp)
-#         rec_loss = cross_entropy(logit.view(-1, opt.n_vocab), target.contiguous().view(-1))
-#     else:
-#         rec_loss = 0
-#         n_seq, batch_size = x.size()
-#         mu, logvar = vae.encoder(x)
-#         z, kld = vae.reparameterize(mu, logvar)
-#         G_inp = G_inp[:1]
-#         G_hidden = None
-#         for di in range(target.size(0)):
-#             logit, G_hidden = vae.generator(G_inp, z, G_hidden)
-#             topv, topi = logit.topk(1)
-#             G_inp = topi.squeeze(2).detach()
-#             rec_loss += cross_entropy(logit.view(-1, opt.n_vocab), target[di])
-#         rec_loss = rec_loss / float(target.size(0)) # average across each observation
-#     kld_coef = kl_weight(step)
-#     loss = opt.rec_coef * rec_loss + kld_coef*kld
-#     vae_opt.zero_grad()
-#     loss.backward()
-#     clip_grad_norm_(vae.parameters(), opt.clip)         # gradient clipping
-#     vae_opt.step()
-#     # vae_scheduler.step()
-#     return rec_loss.item(), kld.item()
-
-def calc_batch_loss(x, kl_coef=1, teacher_forcing=1):
+def calc_batch_loss(batch, kl_coef=1, teacher_forcing=1):
     """
     Calculate the loss of current model (train & eval status) on the gievn batch x and kl_weight.
-    :param x: batch of data, each entry correspond to a word. (seq_len, batch_size)
+    :param batch: batch of data.
     :param kl_coef: weight of KL divergence term in loss.
     :param teacher_forcing: rate of teacher forcing, default=1.
     :return:
@@ -191,31 +154,30 @@ def calc_batch_loss(x, kl_coef=1, teacher_forcing=1):
         rec_loss: (tensor) reconstruction loss. average across each ovservation.
         kl_loss: (tensor) KL divergence loss.
     """
+    x, x_len = batch.text
     target = x[1:]  # target for generator should exclude first word of sequence
-    G_inp = x[:-1].clone()
-    G_inp = word_dropout(G_inp, opt.word_dropout)
     if random.random() < teacher_forcing: # teacher forcing
-        logit, _, kld = vae(x, G_inp)
+        logit, kld = vae(x, x_len)
         rec_loss = cross_entropy(logit.view(-1, opt.n_vocab), target.contiguous().view(-1))
     else: # non teacher forcing
         rec_loss = 0
-        mu, logvar = vae.encoder(x)
+        mu, logvar = vae.encoder(x, x_len)
         z, kld = vae.reparameterize(mu, logvar)
-        G_inp = G_inp[:1]
+        G_inp = x[:1].clone() # "[SOS]" token for each sequence
         G_hidden = None
         for di in range(target.size(0)):
-            logit, G_hidden = vae.generator(G_inp, z, G_hidden)
+            logit, G_hidden = vae.generator(G_inp, [1]*G_inp.size(1), z, G_hidden)
             topv, topi = logit.topk(1)
             G_inp = topi.squeeze(2).detach()
             rec_loss += cross_entropy(logit.view(-1, opt.n_vocab), target[di])
-        rec_loss = rec_loss / float(target.size(0))  # average across each observation
+    rec_loss = rec_loss / (target != pad_id).int().sum()  # average across each observation
     loss = opt.rec_coef * rec_loss + kl_coef * kld
     return loss, rec_loss, kld
 
-def train_aggressive(x, kl_coef=1, teacher_forcing=1, max_iter=100):
+def train_aggressive(batch, kl_coef=1, teacher_forcing=1, max_iter=100):
     """
     Train the encoder part aggressively
-    :param x: *first* batch of data, each entry correspond to a word. (seq_len, batch_size)
+    :param batch: *first* batch of data, each entry correspond to a word.
     :param kl_coef: weight of KL divergence term in loss.
     :param teacher_forcing: rate of teacher forcing, default=1.
     :return: None
@@ -226,19 +188,19 @@ def train_aggressive(x, kl_coef=1, teacher_forcing=1, max_iter=100):
     burn_cur_loss = 0 # running loss to validate convergence.
     for num_iter in range(1, max_iter+1):
         # update the encoder
+        loss, rec_loss, kl_loss = calc_batch_loss(batch, kl_coef, teacher_forcing)
+
         vae.zero_grad()
-        loss, rec_loss, kl_loss = calc_batch_loss(x, kl_coef, teacher_forcing)
-        burn_cur_loss += loss.item()
         loss.backward()
         clip_grad_norm_(vae.parameters(), opt.clip)
         enc_opt.step()
 
         # find next batch randomly
         batch = random.choice(train_batch_list)
-        x = batch.text.to(device)
 
         # return in converge (15 borrowed from original opensource implementation)
-        if num_iter % 15 == 0:
+        burn_cur_loss += loss.item()
+        if num_iter % 10 == 0:
             if burn_cur_loss >= burn_pre_loss: # the smaller loss, the better.
                 return
             burn_pre_loss = burn_cur_loss
@@ -254,8 +216,7 @@ def evaluate():
     valid_kl_loss = []
     with torch.no_grad():
         for batch in test_iter:
-            x = batch.text.to(device)
-            loss, rec_loss, kld = calc_batch_loss(x) # kl_coef=1 by default.
+            loss, rec_loss, kld = calc_batch_loss(batch) # kl_coef=1 by default.
             valid_rec_loss.append(rec_loss.item())
             valid_kl_loss.append(kld.item())
     return  np.mean(valid_rec_loss), np.mean(valid_kl_loss)
@@ -266,12 +227,13 @@ def calc_mi(data_iter):
     :param data_iter: iterator of batch data.
     :return: (float) mutual_information.
     """
+    vae.eval()
     mi = 0
     num_batches = 0
     with torch.no_grad():
         for batch in data_iter:
-            x = batch.text.to(device)
-            mi += vae.mutual_info(x)
+            x, x_len = batch.text
+            mi += vae.mutual_info(x, x_len)
             num_batches += 1
         mi /= float(num_batches)
     return mi
@@ -288,19 +250,18 @@ def training():
         train_kl_loss = []
         train_mi = []
         for batch in train_iter:
-            vae.train()
             runing_rec_loss = []
             runing_kl_loss = []
             runing_mi = []
-            x = batch.text.to(device) 	                                #Used as encoder input as well as target output for generator
             kl_coef = kl_weight(step)
 
             # train encoder aggressively based on random mini-batches (current batch be the first one).
             if aggressive_flag:
-                train_aggressive(x, kl_coef, teacher_forcing=opt.teacher_forcing)
+                train_aggressive(batch, kl_coef, teacher_forcing=opt.teacher_forcing)
 
             # calculate loss of model (after aggressive) training on current batch.
-            loss, rec_loss, kl_loss = calc_batch_loss(x, kl_coef, opt.teacher_forcing)
+            vae.train()
+            loss, rec_loss, kl_loss = calc_batch_loss(batch, kl_coef, opt.teacher_forcing)
             # zero out gradient for all parameters regardless of optimizer. (encoder+generator)
             vae.zero_grad()
             # back propagation & gradient clipping
@@ -338,7 +299,6 @@ def training():
         train_kl_loss = np.mean(train_kl_loss)
         train_mi = np.mean(train_mi)
         valid_rec_loss, valid_kl_loss = evaluate()
-        vae.eval()
         valid_mi = calc_mi(test_iter)
 
         # stop aggressive training if the mutual information is not improved.
@@ -347,8 +307,6 @@ def training():
                 aggressive_flag = False
                 print("STOP BURNING")
             pre_mutual_info = valid_mi
-
-
 
         # may be report perplxity here.
         tb_writer.add_scalar("Rec_loss/train", train_rec_loss, epoch)
@@ -376,12 +334,13 @@ def training():
 
 def generate_paragraph(z, decode="greedy"):
     vae.eval()
-    G_inp = fields["text"].numericalize([[fields["text"].init_token]], device=device)
+    G_inp = torch.tensor([[vocab.stoi[fields["text"].init_token]]], device=device)
+    # G_inp = fields["text"].numericalize([[fields["text"].init_token]], device=device)
     output_str = fields["text"].init_token
     G_hidden = None  # init with no hidden state
     with torch.no_grad():
         while G_inp[0][0].item() != vocab.stoi[fields["text"].eos_token]:
-            logit, G_hidden = vae.generator(G_inp, z, G_hidden)
+            logit, G_hidden = vae.generator(G_inp, [1], z, G_hidden)
             if decode == "greedy":
                 topv, topi = logit.topk(1)
                 G_inp = topi[0].detach()
@@ -399,9 +358,9 @@ def generate_paragraph(z, decode="greedy"):
                 break
     return output_str
 
-def generate_paragraphs(vae, n_sample=50, decode="greedy"):
+def generate_paragraphs(n_sample=50, decode="greedy"):
     vae.to(device)
-    vae.eval()
+
     for i in range(n_sample):
         z = torch.randn([1, opt.n_z], device=device)
         output_str = generate_paragraph(z, decode)
@@ -412,9 +371,8 @@ def visualize_graph():
     vae.to(device)
     vae.eval()
     batch = train_batch_list[0]
-    x  = batch.text.to(device)
-    G_inp = x[:-1].clone()
-    tb_writer.add_graph(vae, (x, G_inp))
+    x, x_len  = batch.text
+    tb_writer.add_graph(vae, (x, x_len))
 
 
 if __name__ == '__main__':
@@ -423,4 +381,4 @@ if __name__ == '__main__':
         training()
     model_path = osp.join(model_dir, "state_dict_best.tar")
     vae.load_state_dict(torch.load(model_path))
-    generate_paragraphs(vae, decode=opt.generation_decoder)
+    generate_paragraphs(decode=opt.generation_decoder)

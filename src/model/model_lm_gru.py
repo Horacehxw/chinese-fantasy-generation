@@ -5,6 +5,7 @@ Borrow from homework3.
 import torch
 import torch.nn as nn
 import math
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 class LMModel(nn.Module):
     # Language lm_model is composed of three parts: a word embedding layer, a rnn network and a output layer.
@@ -39,7 +40,7 @@ class LMModel(nn.Module):
         self.decoder.bias.data.zero_()
         self.decoder.weight.data.uniform_(-init_uniform, init_uniform)
 
-    def forward(self, input, hidden):
+    def forward(self, input, lengths, hidden):
         """
         :param input: (Sequence, Batch size, Input dimension)
         :return: output, hidden.
@@ -53,7 +54,10 @@ class LMModel(nn.Module):
         # Output = (seq_len, batch_size, nhid)
         # The hidden contains hidden state for t = seq_len, for each layer.
         # Hidden = (nlyaers, batch_size, nhid)
+        embeddings = pack_padded_sequence(embeddings, lengths)
         output, hidden = self.rnn(embeddings, hidden)
+        output, _ = pad_packed_sequence(output)
+
         output = self.drop(output)  # output = (seq_len, batch_size, nhid)
         ########################################
         decoded = self.decoder(output) # decoded = (seq_len * batch_size, n_hidden)
