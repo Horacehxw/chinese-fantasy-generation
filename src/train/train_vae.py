@@ -23,6 +23,8 @@ parser = argparse.ArgumentParser(description="Pytorch flat lstm VAE lm_model for
 parser.add_argument("--teacher_forcing", type=float, default=1) # probability to do teacher forcing (default to every iter)
 parser.add_argument("--kl_annealing", default="tanh",
                     help="kl_annealing method: 'linear', 'none', 'cyclic'， 'tanh' (default)， 'cyclic_tanh'")
+parser.add_argument("--cycle", type=int, default=4,
+                    help="number of cycles to divide the whole training duration. (cyclic kl annealing)")
 parser.add_argument("--aggressive", action="store_true",
                     help="apply aggresive training on encoder (from paper lagging inference ...)")
 parser.add_argument('--train_batch_size', type=int, default=128, metavar='N',
@@ -31,14 +33,14 @@ parser.add_argument('--eval_batch_size', type=int, default=64, metavar='N',
                     help='eval batch size')
 parser.add_argument('--epochs', type=int, default=20)
 parser.add_argument('--n_hidden_G', type=int, default=512)
-parser.add_argument('--n_layers_G', type=int, default=2)
+parser.add_argument('--n_layers_G', type=int, default=1)
 parser.add_argument('--n_hidden_E', type=int, default=512)
 parser.add_argument('--n_layers_E', type=int, default=1)
 parser.add_argument('--rec_coef', type=float, default=1,
                     help="weight of reconstruction loss.")
 parser.add_argument('--n_z', type=int, default=300)
 parser.add_argument('--word_dropout', type=float, default=0.5)
-parser.add_argument('--lr', type=float, default=0.0003)
+parser.add_argument('--lr', type=float, default=0.0001)
 parser.add_argument('--gpu_device', type=int, default=0)
 parser.add_argument('--n_highway_layers', type=int, default=2)
 parser.add_argument('--n_embed', type=int, default=300)
@@ -65,8 +67,10 @@ torch.manual_seed(opt.seed)
 gpu_id = opt.gpu_device   #str(gpu_device)
 if torch.cuda.is_available():
     device = torch.device("cuda", gpu_id)
+    print("Using GPU: {}".format(torch.cuda.get_device_name(gpu_id)))
 else:
     device = torch.device("cpu")
+    print("Using CPU")
 
 
 ##################################################
@@ -124,7 +128,7 @@ cross_entropy = torch.nn.CrossEntropyLoss(reduction="sum", ignore_index=pad_id) 
 
 # KL weight function
 num_iter = len(train_batch_list) * opt.epochs
-duration = (num_iter // 4) + 1
+duration = (num_iter // opt.cycle) + 1
 
 def kl_weight(step):
     if opt.kl_annealing == "linear":
@@ -174,7 +178,7 @@ def calc_batch_loss(batch, kl_coef=1, teacher_forcing=1):
     loss = opt.rec_coef * rec_loss + kl_coef * kld
     return loss, rec_loss, kld
 
-def train_aggressive(batch, kl_coef=1, teacher_forcing=1, max_iter=100):
+def train_aggressive(batch, kl_coef=1, teacher_forcing=1, max_iter=20):
     """
     Train the encoder part aggressively
     :param batch: *first* batch of data, each entry correspond to a word.
@@ -198,9 +202,9 @@ def train_aggressive(batch, kl_coef=1, teacher_forcing=1, max_iter=100):
         # find next batch randomly
         batch = random.choice(train_batch_list)
 
-        # return in converge (15 borrowed from original opensource implementation)
+        # return in converge
         burn_cur_loss += loss.item()
-        if num_iter % 10 == 0:
+        if num_iter % 5 == 0:
             if burn_cur_loss >= burn_pre_loss: # the smaller loss, the better.
                 return
             burn_pre_loss = burn_cur_loss
@@ -288,7 +292,7 @@ def training():
                 runing_mi = np.mean(runing_mi)
                 print("Iteration.", step, "T_ppl:", '%.2f' % np.exp(runing_rec_loss), "T_kld:", '%.2f' % runing_kl_loss,
                       "KL_weight:", kl_weight(step-1), "Mutual Info:", "%.2f" % runing_mi)
-                tb_writer.add_scalar("Runing/KL_weight", kl_weight(step - 1), step)
+                tb_writer.add_scalar("Runing/KL_weight", kl_weight(step - 1)/opt.rec_coef, step)
                 tb_writer.add_scalar("Runing/Perplexity", np.exp(runing_rec_loss), step)
                 tb_writer.add_scalar("Runing/KL_loss", runing_kl_loss, step)
                 tb_writer.add_scalar("Runing/Rec_loss", runing_rec_loss, step)
@@ -377,7 +381,7 @@ def visualize_graph():
 
 if __name__ == '__main__':
     if not opt.generate_only:
-        visualize_graph()
+        # visualize_graph()
         training()
     model_path = osp.join(model_dir, "state_dict_best.tar")
     vae.load_state_dict(torch.load(model_path))

@@ -48,7 +48,7 @@ def word_dropout(G_inp, unk_token, special_tokens, drop=0.5):
     :param G_inp: (seq_len, batch_size), input sequence.
     :param unk_token: index of unkown token
     :param special_tokens: list of index of special tokens.
-    :param drop: dropout keep ratio.
+    :param drop: dropout drop ratio.
     :return: sequence after dropout.
     """
     r = np.random.rand(G_inp.size(0), G_inp.size(1))

@@ -40,8 +40,9 @@ TEXT_cws = Field(init_token="[SOS]",
                 eos_token="[EOS]",
                 pad_token="[PAD]",
                 unk_token="[UNK]",
-                # stop_words=["[SEP]"],
-                tokenize=tokenizer
+                stop_words=["[SEP]"],
+                tokenize=tokenizer,
+                include_lengths=True
                )
 
 def generate_paragraph(text, max_count=10, comma=True, max_sent_len=30):

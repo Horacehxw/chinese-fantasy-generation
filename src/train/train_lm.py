@@ -20,8 +20,8 @@ parser.add_argument('--eval_batch_size', type=int, default=64, metavar='N',
                     help='eval batch size')
 parser.add_argument('--epochs', type=int, default=20)
 parser.add_argument('--n_hidden', type=int, default=512)
-parser.add_argument('--n_layers', type=int, default=2)
-parser.add_argument('--word_dropout', type=float, default=1)
+parser.add_argument('--n_layers', type=int, default=1)
+parser.add_argument('--word_dropout', type=float, default=0) # no word dropout by default
 parser.add_argument('--lr', type=float, default=0.0003)
 parser.add_argument('--gpu_device', type=int, default=0)
 parser.add_argument('--n_embed', type=int, default=300)
@@ -46,8 +46,10 @@ torch.manual_seed(opt.seed)
 gpu_id = opt.gpu_device   #str(gpu_device)
 if torch.cuda.is_available():
     device = torch.device("cuda", gpu_id)
+    print("Using GPU: {}".format(torch.cuda.get_device_name(gpu_id)))
 else:
     device = torch.device("cpu")
+    print("Using CPU")
 
 
 ##################################################
