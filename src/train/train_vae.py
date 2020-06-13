@@ -51,6 +51,8 @@ parser.add_argument('--seed', type=int, default=42,
 parser.add_argument("--use_cws", action="store_true", help="use chinese word segementation")
 parser.add_argument("--generate_only", action="store_true",
                     help="generate sample paragraphs from pretrained lm_model w/ the same setting")
+parser.add_argument("--generate_epoch", type=int, default=20,
+                    help="the number of epoch to generate sentences (only useful if generate_only=True)")
 parser.add_argument("--generation_decoder", default="greedy",
                     help="generation decoding algorithm: 'greedy' (default), 'sample', 'beam search'"
                     ) # generation decoding algorithm
@@ -75,8 +77,10 @@ else:
 
 ##################################################
 # set up tensorboard & log directory
-experiment_list = ["{}:{}".format(k,v) for k,v in vars(opt).items() if k not in ["gpu_device", "generation_decoder", "generate_only"]]
+experiment_list = ["{}:{}".format(k,v) for k,v in vars(opt).items() if k not in ["gpu_device", "generation_decoder",
+                                                                                 "generate_only", "generate_epoch"]]
 experiment_path = osp.join(*experiment_list)
+
 
 result_path = (Path(__file__)/"../../../results/flat_vae").resolve()
 print("result path = {}".format(result_path))
@@ -271,7 +275,9 @@ def training():
             # back propagation & gradient clipping
             loss.backward()
             clip_grad_norm_(vae.parameters(), opt.clip)
-            if aggressive_flag:
+            if opt.aggressive:
+                if not aggressive_flag:
+                    enc_opt.step()
                 dec_opt.step() # only update generator (encoder already trained aggressively).
             else:
                 vae_opt.step() # train the whole model.
@@ -368,7 +374,7 @@ def generate_paragraphs(n_sample=50, decode="greedy"):
     for i in range(n_sample):
         z = torch.randn([1, opt.n_z], device=device)
         output_str = generate_paragraph(z, decode)
-        tb_writer.add_text("Generate Paragraph", output_str, i)
+        tb_writer.add_text("Generate Paragraph for epoch {}".format(opt.generate_epoch), output_str, i)
         print(output_str)
 
 def visualize_graph():
@@ -380,9 +386,11 @@ def visualize_graph():
 
 
 if __name__ == '__main__':
-    if not opt.generate_only:
-        # visualize_graph()
+    if opt.generate_only:
+        model_path = osp.join(model_dir, "state_dict_{}.tar".format(opt.generate_epoch))
+    else:
         training()
-    model_path = osp.join(model_dir, "state_dict_best.tar")
+        model_path = osp.join(model_dir, "state_dict_best.tar")
     vae.load_state_dict(torch.load(model_path))
+
     generate_paragraphs(decode=opt.generation_decoder)
