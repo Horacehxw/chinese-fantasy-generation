@@ -56,6 +56,9 @@ parser.add_argument("--generate_epoch", type=int, default=20,
 parser.add_argument("--generation_decoder", default="greedy",
                     help="generation decoding algorithm: 'greedy' (default), 'sample', 'beam search'"
                     ) # generation decoding algorithm
+parser.add_argument("--predict_hidden", action="store_true",
+                    help="use latent variable to predict initial hidden state of "
+                    )
 
 opt = parser.parse_args()
 print(opt)
@@ -74,6 +77,9 @@ else:
     device = torch.device("cpu")
     print("Using CPU")
 
+
+# TODO: remove the line below
+opt.predict_hidden = True
 
 ##################################################
 # set up tensorboard & log directory
@@ -347,9 +353,7 @@ def generate_paragraph(z, decode="greedy"):
     G_inp = torch.tensor([[vocab.stoi[fields["text"].init_token]]], device=device)
     # G_inp = fields["text"].numericalize([[fields["text"].init_token]], device=device)
     output_str = fields["text"].init_token
-    h_0 = torch.randn((vae.generator.n_layers_G, 1, vae.generator.n_hidden_G), device=device)
-    c_0 = torch.randn((vae.generator.n_layers_G, 1, vae.generator.n_hidden_G), device=device)
-    G_hidden = (h_0,c_0)  # init with no hidden state
+    G_hidden = None
     with torch.no_grad():
         while G_inp[0][0].item() != vocab.stoi[fields["text"].eos_token]:
             logit, G_hidden = vae.generator(G_inp, [1], z, G_hidden)

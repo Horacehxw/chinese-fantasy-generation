@@ -78,28 +78,38 @@ class Generator(nn.Module):
         self.lstm = nn.LSTM(input_size=opt.n_embed+opt.n_z, hidden_size=opt.n_hidden_G, num_layers=opt.n_layers_G)
         self.fc = nn.Linear(opt.n_hidden_G, opt.n_vocab)
         self.hidden = None
+        self.predict_hidden = opt.predict_hidden
+        self.fc_hidden = nn.Linear(opt.n_z, opt.n_hidden_G*opt.n_layers_G, bias=False)
 
-    def init_hidden(self, batch_size):
-        tensor = next(self.parameters())
-        h_0 = tensor.new_zeros(self.n_layers_G, batch_size, self.n_hidden_G)
-        c_0 = tensor.new_zeros(self.n_layers_G, batch_size, self.n_hidden_G)
-        self.hidden = h_0, c_0
+    def init_hidden(self, batch_size, z):
+        if self.predict_hidden:
+            c_0 = self.fc_hidden(z)
+            c_0 = c_0.view(batch_size, self.n_layers_G, self.n_hidden_G) # extract layers
+            c_0 = c_0.permute([1, 0, 2]) # (n_layers_G, batch_size, n_hidden_G)
+            h_0 = torch.tanh(c_0)
+            # h_0 = self.fc_hidden(z)
+            # c_0 = h_0.new_zeros(h_0.size())
+        else:
+            tensor = next(self.parameters())
+            h_0 = tensor.new_zeros(self.n_layers_G, batch_size, self.n_hidden_G)
+            c_0 = tensor.new_zeros(self.n_layers_G, batch_size, self.n_hidden_G)
+        return (h_0, c_0)
 
     def forward(self, x, lengths, z, g_hidden = None):
         """
         :param x: input (seq_len, batch_size, n_embed)
         :param lengths: (list[int], length=batch_size), length of each sequence in minibatch
-        :param z: latent variable
+        :param z: (z_batch, nz) latent variable
         :param g_hidden:
         :return: logit, hidden(h_T,c_T)
         """
         x = self.embedding(x)
         n_seq, batch_size, n_embed = x.size()
-        z = torch.cat([z] * n_seq, 0).view(n_seq, batch_size, self.n_z)	    #Replicate z inorder to append same z at each time step
-        x = torch.cat([x, z], dim=2)	                                    #Append z to generator word input at each time step
+        z_inp = torch.cat([z] * n_seq, 0).view(n_seq, batch_size, self.n_z)	    #Replicate z inorder to append same z at each time step
+        x = torch.cat([x, z_inp], dim=2)	                                    #Append z to generator word input at each time step
         x = self.drop(x)
         if g_hidden is None:	                                    #if we are validating
-            self.init_hidden(batch_size)
+            self.hidden = self.init_hidden(batch_size, z)
         else:					                                    #if we are training
             self.hidden = g_hidden
 

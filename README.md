@@ -61,7 +61,9 @@ Run with "-h" option to see argument details.
 python src/train/train_vae.py
 ```
 
-Run with "-h" option to see argument details.
+Run with "-h" option to see argument details. Supported parameters include KL annealing method, KL annealing cycle, 
+weight of reconstruction loss, whether to predict hidden state of decoder by latent variable, whether to 
+use aggressive training, etc.
 
 ## Visualization
 
